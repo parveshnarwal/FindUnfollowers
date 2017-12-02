@@ -7,7 +7,6 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.support.design.widget.FloatingActionButton;
 import android.support.v4.widget.SwipeRefreshLayout;
-import android.text.format.DateUtils;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -17,8 +16,12 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.AdView;
+import com.google.android.gms.ads.InterstitialAd;
+
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 
 import twitter4j.IDs;
@@ -44,16 +47,22 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
     ProgressBar progress_bar;
     private SwipeRefreshLayout swipeRefreshLayout;
     private NonFollowersAdapter nonFollowersAdapter;
-    private FloatingActionButton fab_logout;
-    private FloatingActionButton fab_show_more;
+    private FloatingActionButton fab_logout,fab_show_more,fab_refresh;
 
     private final String PREF_DATE = "pref_cache_date";
+    private final String PREF_UNFOLLOW_COUNT = "pref_unfollow_count";
+
+    private int masterUnfollowCount = 0;
+    private final int DAILY_LIMIT = 60;
+
+    private InterstitialAd mAdOnRefresh, mAdOnUnfollow, mAdOnLand;
+
 
     private SharedPreferences sharedPreferences;
 
     private int UnfollowedCount = 0;
 
-    private Boolean maxReached =false;
+    private Boolean maxReached = false;
 
     int start = 0;
     int end = 0;
@@ -77,10 +86,72 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
         init_activity();
         sharedPreferences = getSharedPreferences(MainActivity.PREF_NAME, 0);
         config_cache();
+
+        config_ads();
+
         twitter = GetTwitterInstance();
 
         GoFetchUsers(twitter);
 
+        if(mAdOnLand.isLoaded()) mAdOnLand.show();
+
+    }
+
+    private void config_ads() {
+        AdView adView = (AdView) findViewById(R.id.adView);
+
+        mAdOnLand = new InterstitialAd(this);
+        mAdOnLand.setAdUnitId("ca-app-pub-4327820221556313/4377841945");
+        mAdOnLand.loadAd(new AdRequest.Builder().build());
+
+        mAdOnLand.setAdListener(new AdListener() {
+            @Override
+            public void onAdClosed() {
+                super.onAdClosed();
+                mAdOnLand.loadAd(new AdRequest.Builder().build());
+            }
+        });
+
+        mAdOnRefresh = new InterstitialAd(this);
+        mAdOnRefresh.setAdUnitId("ca-app-pub-4327820221556313/3152513895");
+        mAdOnRefresh.loadAd(new AdRequest.Builder().build());
+
+        mAdOnRefresh.setAdListener(new AdListener() {
+            @Override
+            public void onAdClosed() {
+                super.onAdClosed();
+                mAdOnRefresh.loadAd(new AdRequest.Builder().build());
+                startActivity(new Intent(NonFollowers.this, NonFollowers.class));
+            }
+
+
+        });
+
+        mAdOnUnfollow = new InterstitialAd(this);
+        mAdOnUnfollow.setAdUnitId("ca-app-pub-4327820221556313/1827043689");
+        mAdOnUnfollow.loadAd(new AdRequest.Builder().build());
+
+        mAdOnUnfollow.setAdListener(new AdListener() {
+            @Override
+            public void onAdClosed() {
+                super.onAdClosed();
+                mAdOnUnfollow.loadAd(new AdRequest.Builder().build());
+            }
+        });
+
+
+        AdRequest adRequest = new AdRequest.Builder()
+                .addTestDevice("8BE8614F2298107266F01F0E41BEDE27")
+                .build();
+
+        adView.loadAd(adRequest);
+
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if(mAdOnLand.isLoaded()) mAdOnLand.show();
     }
 
     private void config_cache() {
@@ -88,19 +159,25 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
         String today = android.text.format.DateFormat.format("yyyy-MM-dd", new java.util.Date()).toString();
 
 
-        if(!sharedPreferences.contains(PREF_DATE)){
+        if (!sharedPreferences.contains(PREF_DATE)) {
             e.putString(PREF_DATE, today);
-        }
-        else{
+        } else {
             String saved = sharedPreferences.getString(PREF_DATE, "");
 
-            if(!today.equals(saved)){
+            if (!today.equals(saved)) {
                 //delete cache
                 DatabaseHandler handler = new DatabaseHandler(this);
                 handler.deleteCachedData();
                 e.putString(PREF_DATE, today);
             }
 
+        }
+
+        if (sharedPreferences.contains(PREF_UNFOLLOW_COUNT)) {
+            masterUnfollowCount = sharedPreferences.getInt(PREF_UNFOLLOW_COUNT, 0);
+
+        } else {
+            e.putInt(PREF_UNFOLLOW_COUNT, masterUnfollowCount);
         }
 
         e.apply();
@@ -131,13 +208,13 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
     private void GoFetchUnfollowersData() {
         start = end;
 
-        if(start != 0 && start < userTwitterData.getNot_following_back_ids().size() - 1){
+        if (start != 0 && start < userTwitterData.getNot_following_back_ids().size() - 1) {
             start++;
         }
 
         end = start + 9;
 
-        if(userTwitterData.getNot_following_back_ids().size() - 1 <= end){
+        if (userTwitterData.getNot_following_back_ids().size() - 1 <= end) {
             end = userTwitterData.getNot_following_back_ids().size() - 1;
             maxReached = true;
         }
@@ -154,6 +231,8 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
 
         fab_logout = (FloatingActionButton) findViewById(R.id.logout_fab);
         fab_show_more = (FloatingActionButton) findViewById(R.id.show_more_fab);
+        fab_refresh = (FloatingActionButton) findViewById(R.id.refresh_fab);
+
 
         fab_logout.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -181,8 +260,27 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
         fab_show_more.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if(!maxReached) GoFetchUnfollowersData();
-                else Toast.makeText(NonFollowers.this, "Nothing more to show!", Toast.LENGTH_SHORT).show();
+                if (!maxReached) GoFetchUnfollowersData();
+                else
+                    Toast.makeText(NonFollowers.this, "Nothing more to show!", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        fab_refresh.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View view) {
+                Toast.makeText(NonFollowers.this, "Refresh", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+        });
+
+        fab_refresh.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+
+                if(mAdOnRefresh.isLoaded()) mAdOnRefresh.show();
+
+                else startActivity(new Intent(NonFollowers.this, NonFollowers.class));
             }
         });
 
@@ -220,7 +318,7 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
 
     @Override
     public void onRefresh() {
-        if(!maxReached)  GoFetchUnfollowersData();
+        if (!maxReached) GoFetchUnfollowersData();
         swipeRefreshLayout.setRefreshing(false);
     }
 
@@ -229,32 +327,44 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
 
         Long userID = userTwitterData.getNot_following_back_ids().get(i);
 
-        try {
-            User u = twitter.destroyFriendship(userID);
+        if (masterUnfollowCount < DAILY_LIMIT) {
+            try {
 
-            Toast.makeText(this, "Unfollowed " + u.getName(), Toast.LENGTH_SHORT).show();
+                SharedPreferences.Editor e = sharedPreferences.edit();
 
-            UnfollowedCount++;
+                User u = twitter.destroyFriendship(userID);
 
-            if(UnfollowedCount == 5 && !maxReached){
-                GoFetchUnfollowersData();
-                UnfollowedCount = 0;
+                Toast.makeText(this, "Unfollowed @" + u.getScreenName(), Toast.LENGTH_SHORT).show();
+
+                UnfollowedCount++;
+                masterUnfollowCount++;
+
+                e.putInt(PREF_UNFOLLOW_COUNT, masterUnfollowCount);
+
+                e.apply();
+
+                //remove user from list
+                userTwitterData.getNot_following_back_ids().remove(i);
+                userTwitterData.getNfb_screen_names().remove(i);
+                userTwitterData.getNfb_usernames().remove(i);
+                userTwitterData.getProfile_pic_ids().remove(i);
+
+                //set adapter again
+                nonFollowersAdapter.notifyDataSetChanged();
+
+                if (UnfollowedCount == 5 && !maxReached) {
+                    if(mAdOnUnfollow.isLoaded()) mAdOnUnfollow.show();
+                    GoFetchUnfollowersData();
+                    UnfollowedCount = 0;
+                }
+
+            } catch (TwitterException e) {
+                e.printStackTrace();
             }
-
-        } catch (TwitterException e) {
-            e.printStackTrace();
+        } else {
+            Toast.makeText(this, "Sorry! You have used up your limit of " + DAILY_LIMIT + " unfollows/day!", Toast.LENGTH_SHORT).show();
         }
 
-        //remove user from list
-        userTwitterData.getNot_following_back_ids().remove(i);
-        userTwitterData.getNfb_screen_names().remove(i);
-        userTwitterData.getNfb_usernames().remove(i);
-        userTwitterData.getProfile_pic_ids().remove(i);
-
-        //set adapter again
-        nonFollowersAdapter.notifyDataSetChanged();
-
-        //gridView.setAdapter(nonFollowersAdapter);
     }
 
 
@@ -271,8 +381,6 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
             DatabaseHandler handler = new DatabaseHandler(NonFollowers.this);
 
 
-
-
             for (int i = start; i <= end; i++) {
                 //some how get the profile pics
 
@@ -280,7 +388,7 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
 
                     NFB_User nfb_user = handler.getNFB_User(non_folllowers_ids.get(i));
 
-                    if(nfb_user == null){
+                    if (nfb_user == null) {
                         User user = twitter.showUser(non_folllowers_ids.get(i));
                         nfb_user = new NFB_User(user.getId(), user.getName(), user.getScreenName(), user.getProfileImageURL().replace("_normal", ""));
                         handler.addNFB_User(nfb_user);
@@ -288,9 +396,7 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
                         pic_urls.add(user.getProfileImageURL().replace("_normal", ""));
                         nfb_screen.add(user.getScreenName());
                         nfb_users.add(user.getName());
-                    }
-
-                    else {
+                    } else {
                         pic_urls.add(nfb_user.getProfile_pic_url());
                         nfb_screen.add(nfb_user.getScreen_name());
                         nfb_users.add(nfb_user.getUser_name());
@@ -318,12 +424,10 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
             loadingText.setVisibility(View.GONE);
 
             //set adapter here
-            if(gridView.getVisibility() == View.GONE){
+            if (gridView.getVisibility() == View.GONE) {
                 nonFollowersAdapter = new NonFollowersAdapter(NonFollowers.this, userTwitterData);
                 gridView.setAdapter(nonFollowersAdapter);
-            }
-
-            else{
+            } else {
                 Toast.makeText(NonFollowers.this, "List Updated", Toast.LENGTH_SHORT).show();
                 nonFollowersAdapter.notifyDataSetChanged();
             }
@@ -332,6 +436,7 @@ public class NonFollowers extends Activity implements SwipeRefreshLayout.OnRefre
             gridView.setVisibility(View.VISIBLE);
             fab_logout.setVisibility(View.VISIBLE);
             fab_show_more.setVisibility(View.VISIBLE);
+            fab_refresh.setVisibility(View.VISIBLE);
 
             if (!(userTwitterData.getNot_following_back_ids().size() > 0))
                 Toast.makeText(NonFollowers.this, "Congratulations.. Everyone is following you back!", Toast.LENGTH_SHORT).show();
